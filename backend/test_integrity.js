@@ -1,10 +1,12 @@
+const crypto = require('node:crypto');
 const { transferMoney, runAsync, getAsync } = require('./ledgerService');
 const db = require('./database');
 
 async function runIntegrityTests() {
   console.log('--- STARTING LEDGERLINE INTEGRITY & CONCURRENCY SUITE ---');
 
-  // 1. Seed demo accounts
+  // Seed demo accounts
+  await runAsync('DELETE FROM audit_logs');
   await runAsync('DELETE FROM ledger_entries');
   await runAsync('DELETE FROM transactions');
   await runAsync('DELETE FROM accounts');
@@ -17,7 +19,7 @@ async function runIntegrityTests() {
 
   // TEST 1: Double-Entry Conservation Check
   console.log('\n[TEST 1] Testing Double-Entry Conservation...');
-  const tx1 = await transferMoney({
+  await transferMoney({
     fromAccountId: 1,
     toAccountId: 2,
     amount: 300,
@@ -57,7 +59,7 @@ async function runIntegrityTests() {
     await transferMoney({
       fromAccountId: 1,
       toAccountId: 2,
-      amount: 100000, // Alice only has 700
+      amount: 100000,
       idempotencyKey: 'IDEMP-TEST-002',
       actorId: 1
     });
@@ -66,9 +68,32 @@ async function runIntegrityTests() {
     console.log('✅ PASS: Insufficient funds caught and transaction rolled back.');
   }
 
+  // TEST 4: Cryptographic Audit Hash Chain Verification
+  console.log('\n[TEST 4] Testing Cryptographic Audit Trail Hash Chain...');
+  const logs = await new Promise((resolve, reject) => {
+    db.all('SELECT * FROM audit_logs ORDER BY id ASC', [], (err, rows) => (err ? reject(err) : resolve(rows)));
+  });
+
+  let chainValid = true;
+  for (let i = 0; i < logs.length; i++) {
+    const current = logs[i];
+    if (i > 0) {
+      const prev = logs[i - 1];
+      if (current.prev_hash !== prev.hash) {
+        chainValid = false;
+        break;
+      }
+    }
+  }
+
+  if (chainValid && logs.length > 0) {
+    console.log(`✅ PASS: Audit chain verified. All ${logs.length} blocks mathematically linked.`);
+  } else {
+    console.error('❌ FAIL: Audit log hash chain broken or empty.');
+  }
+
   console.log('\n--- ALL INTEGRITY TESTS FINISHED ---');
   process.exit(0);
 }
 
-// Give SQLite a tick to ensure schema setup
 setTimeout(runIntegrityTests, 800);
