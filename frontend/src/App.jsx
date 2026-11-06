@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { ShieldCheck, ArrowRightLeft, Database, Key, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8080/api';
+const API_BASE = window.location.origin.includes('localhost')
+  ? 'http://localhost:8080/api'
+  : '/api';
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');

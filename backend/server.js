@@ -158,6 +158,13 @@ app.get('/api/audit', authenticate(['ADMIN', 'AUDITOR']), async (req, res) => {
   }
 });
 
+const path = require('path');
+
+// Serve frontend build in production
+app.use(express.static(path.join(__dirname, '../frontend/dist')));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+});
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`LedgerLine backend running on port ${PORT}`);
