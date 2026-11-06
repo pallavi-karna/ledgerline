@@ -20,3 +20,8 @@
 - **What the AI Suggested:** Suggested a simple append-only SQL table recording timestamp, user_id, action, and JSON payload with standard autoincrement IDs.
 - **What Was Wrong / The Flaw:** A simple table with standard autoincrement IDs provides zero cryptographic proof against internal tampering or database-level edits (`UPDATE`/`DELETE`). Anyone with database access could silently alter an audit record or delete a row without leaving a verifiable signature.
 - **What I Did Instead:** Implemented a blockchain-inspired SHA-256 cryptographic hash chain where each audit log row computes its hash over `(prev_hash + action + actor_id + details + timestamp)`. Any mutation or deletion immediately breaks the mathematical chain verification.
+### Entry 5: 2026-11-06 — Financial Precision & Floating-Point Drift
+- **Task / Prompt Given:** Handling transfer amounts and account balances across API endpoints and database records.
+- **What the AI Suggested:** Suggested using standard JavaScript `Number` types with decimals (e.g., `19.99`) and `FLOAT` / `REAL` in the database schema.
+- **What Was Wrong / The Flaw:** Standard floating-point arithmetic in software environments conforms to IEEE-754 binary floating-point representation (`0.1 + 0.2 === 0.30000000000000004`). In a double-entry ledger where debits must identically balance credits, fractional rounding errors accumulate over high transaction volumes, leading to phantom currency leaks and reconciliation failures.
+- **What I Did Instead:** Enforced integer arithmetic representing atomic minor currency units (paise/cents). Enforced strict `Number.isInteger(amount)` validation at runtime, paired with an integer database schema and strict non-negative check constraints.
