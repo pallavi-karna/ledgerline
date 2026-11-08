@@ -3,7 +3,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./database');
-const { transferMoney, logAudit, runAsync, getAsync } = require('./ledgerService');
+const { transferMoney, getAsync, allAsync, verifyAuditChain } = require('./ledgerService');
 
 const app = express();
 app.use(cors());
@@ -157,6 +157,17 @@ app.get('/api/audit', authenticate(['ADMIN', 'AUDITOR']), async (req, res) => {
     res.status(500).json({ error: 'Failed to retrieve audit records.' });
   }
 });
+
+// On-demand cryptographic audit chain verification
+app.get('/api/audit/verify', authenticateToken, authorizeRoles('ADMIN', 'AUDITOR'), async (req, res) => {
+  try {
+    const result = await verifyAuditChain();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 const path = require('path');
 
