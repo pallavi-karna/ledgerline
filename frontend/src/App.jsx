@@ -1,5 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, ArrowRightLeft, Database, Key, RefreshCw, AlertCircle, CheckCircle2, Lock, UserCheck } from 'lucide-react';
+import './App.css';
+import { 
+  ShieldCheck, 
+  ArrowRightLeft, 
+  Database, 
+  Key, 
+  RefreshCw, 
+  AlertCircle, 
+  CheckCircle2, 
+  Lock, 
+  UserCheck, 
+  AlertTriangle 
+} from 'lucide-react';
 
 const API_BASE = window.location.origin.includes('localhost')
   ? 'http://localhost:8080/api'
@@ -23,6 +35,7 @@ export default function App() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [statusMessage, setStatusMessage] = useState(null);
   const [chainStatus, setChainStatus] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (token) {
@@ -35,6 +48,7 @@ export default function App() {
 
   const handleLoginUser = async (user, pass) => {
     setStatusMessage(null);
+    setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
@@ -52,6 +66,8 @@ export default function App() {
       localStorage.setItem('username', data.username);
     } catch (err) {
       setStatusMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -82,6 +98,7 @@ export default function App() {
     setRole('');
     setUsername('');
     setChainStatus(null);
+    setStatusMessage(null);
     localStorage.clear();
   };
 
@@ -116,12 +133,52 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok && data.valid) {
-        setChainStatus({ valid: true, message: `✅ Chain Verified: All ${data.count} blocks cryptographically unbroken.` });
+        setChainStatus({ 
+          valid: true, 
+          message: `✅ Chain Verified: All ${data.count} blocks cryptographically linked and unbroken.` 
+        });
       } else {
-        setChainStatus({ valid: false, message: `❌ Alert: Hash chain broken at block #${data.brokenAtIndex}!` });
+        setChainStatus({ 
+          valid: false, 
+          message: `❌ Integrity Alert: Hash chain broken at block #${data.brokenAtIndex}! Reason: ${data.reason}` 
+        });
       }
     } catch (err) {
       setChainStatus({ valid: false, message: 'Verification query failed' });
+    }
+  };
+
+  const simulateTamper = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/audit/tamper-simulate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Simulation failed');
+      setStatusMessage({ 
+        type: 'warning', 
+        text: `⚠️ Tamper Injected at Block #${data.blockId}! Now click "Verify Chain" to observe cryptographic rejection.` 
+      });
+      fetchAuditLogs();
+    } catch (err) {
+      setStatusMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const repairChain = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/audit/tamper-repair`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Repair failed');
+      setStatusMessage({ type: 'success', text: '✅ Audit chain re-anchored and integrity restored.' });
+      fetchAuditLogs();
+      verifyAuditChain();
+    } catch (err) {
+      setStatusMessage({ type: 'error', text: err.message });
     }
   };
 
@@ -159,11 +216,16 @@ export default function App() {
       }
     } catch (err) {
       setStatusMessage({ type: 'error', text: err.message });
+      // Refresh audit logs if admin/auditor so the logged denied attempt shows immediately
+      if (role === 'ADMIN' || role === 'AUDITOR') {
+        fetchAuditLogs();
+      }
     }
   };
 
   return (
-    <div style={{ fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#0d1117', color: '#c9d1d9', minHeight: '100vh', padding: '24px' }}>
+    <div style={{ minHeight: '100vh', padding: '24px 32px' }}>
+      {/* Top Header */}
       <header style={{ borderBottom: '1px solid #30363d', paddingBottom: '16px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '24px', color: '#58a6ff', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -176,13 +238,14 @@ export default function App() {
         {token && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <span style={{ fontSize: '14px' }}>Signed in as: <strong style={{ color: '#f0f6fc' }}>{username}</strong> ({role})</span>
-            <button onClick={handleLogout} style={{ background: '#21262d', color: '#f85149', border: '1px solid #30363d', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}>
+            <button onClick={handleLogout} style={{ background: '#21262d', color: '#f85149', border: '1px solid #30363d', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>
               Logout
             </button>
           </div>
         )}
       </header>
 
+      {/* Global Status Banner */}
       {statusMessage && (
         <div style={{
           padding: '12px 16px',
@@ -195,16 +258,16 @@ export default function App() {
           color: statusMessage.type === 'error' ? '#f85149' : statusMessage.type === 'warning' ? '#d29922' : '#3fb950',
           border: `1px solid ${statusMessage.type === 'error' ? '#f85149' : statusMessage.type === 'warning' ? '#d29922' : '#3fb950'}`
         }}>
-          {statusMessage.type === 'error' ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
+          {statusMessage.type === 'error' ? <AlertCircle size={18} /> : statusMessage.type === 'warning' ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
           <span>{statusMessage.text}</span>
         </div>
       )}
 
       {!token ? (
-        <div style={{ maxWidth: '440px', margin: '40px auto', background: '#161b22', padding: '24px', borderRadius: '8px', border: '1px solid #30363d' }}>
+        <div style={{ maxWidth: '460px', margin: '40px auto', background: '#161b22', padding: '24px', borderRadius: '8px', border: '1px solid #30363d' }}>
           <h2 style={{ fontSize: '18px', marginTop: 0 }}>{isRegister ? 'Register Account' : 'Sign In'}</h2>
           
-          {/* Quick Demo Logins for Evaluator */}
+          {/* Quick Evaluator Access */}
           <div style={{ background: '#0d1117', padding: '12px', borderRadius: '6px', marginBottom: '16px', border: '1px solid #30363d' }}>
             <span style={{ fontSize: '11px', color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: '8px' }}>
               Quick Evaluator Sign-In
@@ -213,28 +276,28 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => handleLoginUser('alice', 'password123')}
-                style={{ padding: '6px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                style={{ padding: '8px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
               >
                 👤 Alice (Account Holder)
               </button>
               <button
                 type="button"
                 onClick={() => handleLoginUser('bob', 'password123')}
-                style={{ padding: '6px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                style={{ padding: '8px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
               >
                 👤 Bob (Account Holder)
               </button>
               <button
                 type="button"
                 onClick={() => handleLoginUser('auditor', 'password123')}
-                style={{ padding: '6px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                style={{ padding: '8px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
               >
                 🔍 Auditor (Read Logs)
               </button>
               <button
                 type="button"
                 onClick={() => handleLoginUser('admin', 'password123')}
-                style={{ padding: '6px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                style={{ padding: '8px', background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
               >
                 ⚡ Admin (Full Control)
               </button>
@@ -249,7 +312,7 @@ export default function App() {
                 required
                 value={authForm.username}
                 onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
-                style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px', boxSizing: 'border-box' }}
+                style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px' }}
               />
             </div>
             <div>
@@ -259,7 +322,7 @@ export default function App() {
                 required
                 value={authForm.password}
                 onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
-                style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px', boxSizing: 'border-box' }}
+                style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px' }}
               />
             </div>
             {isRegister && (
@@ -268,7 +331,7 @@ export default function App() {
                 <select
                   value={authForm.role}
                   onChange={(e) => setAuthForm({ ...authForm, role: e.target.value })}
-                  style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px' }}
                 >
                   <option value="ACCOUNT_HOLDER">Account Holder</option>
                   <option value="AUDITOR">Auditor</option>
@@ -276,7 +339,7 @@ export default function App() {
                 </select>
               </div>
             )}
-            <button type="submit" style={{ padding: '8px', background: '#238636', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, marginTop: '8px' }}>
+            <button type="submit" disabled={loading} style={{ padding: '8px', background: '#238636', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, marginTop: '8px' }}>
               {isRegister ? 'Create Account' : 'Sign In'}
             </button>
           </form>
@@ -288,8 +351,8 @@ export default function App() {
           </p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-          {/* Section 1: Transfer Engine */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          {/* Left Panel: Transfer Form & Account Info */}
           <div style={{ background: '#161b22', padding: '20px', borderRadius: '8px', border: '1px solid #30363d' }}>
             <h3 style={{ marginTop: 0, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <ArrowRightLeft size={18} /> Execute Double-Entry Transfer
@@ -303,7 +366,7 @@ export default function App() {
                     required
                     value={transferForm.fromAccountId}
                     onChange={(e) => setTransferForm({ ...transferForm, fromAccountId: e.target.value })}
-                    style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px', boxSizing: 'border-box' }}
+                    style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px' }}
                   />
                 </div>
                 <div>
@@ -313,19 +376,19 @@ export default function App() {
                     required
                     value={transferForm.toAccountId}
                     onChange={(e) => setTransferForm({ ...transferForm, toAccountId: e.target.value })}
-                    style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px', boxSizing: 'border-box' }}
+                    style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px' }}
                   />
                 </div>
               </div>
               <div>
-                <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px' }}>Amount (in paise / cents)</label>
+                <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px' }}>Amount (in minor units / paise)</label>
                 <input
                   type="number"
                   min="1"
                   required
                   value={transferForm.amount}
                   onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })}
-                  style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px' }}
                 />
               </div>
               <div>
@@ -344,7 +407,7 @@ export default function App() {
                   required
                   value={transferForm.idempotencyKey}
                   onChange={(e) => setTransferForm({ ...transferForm, idempotencyKey: e.target.value })}
-                  style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#f0f6fc', borderRadius: '6px' }}
                 />
               </div>
               <button type="submit" style={{ padding: '8px', background: '#1f6feb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
@@ -352,12 +415,12 @@ export default function App() {
               </button>
             </form>
 
-            <h4 style={{ marginTop: '20px', marginBottom: '8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <h4 style={{ marginTop: '24px', marginBottom: '8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Database size={16} /> Accessible Accounts
             </h4>
             <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
               {accounts.map(acc => (
-                <div key={acc.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', background: '#0d1117', border: '1px solid #30363d', borderRadius: '4px', marginBottom: '6px', fontSize: '13px' }}>
+                <div key={acc.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: '#0d1117', border: '1px solid #30363d', borderRadius: '4px', marginBottom: '6px', fontSize: '13px' }}>
                   <span><strong>#{acc.id}</strong> {acc.account_number}</span>
                   <span style={{ color: '#3fb950', fontWeight: 600 }}>{acc.balance} {acc.currency}</span>
                 </div>
@@ -365,48 +428,92 @@ export default function App() {
             </div>
           </div>
 
-          {/* Section 2: Cryptographic Audit Trail */}
+          {/* Right Panel: SHA-256 Chained Audit Trail */}
           <div style={{ background: '#161b22', padding: '20px', borderRadius: '8px', border: '1px solid #30363d' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <h3 style={{ margin: 0, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Key size={18} /> SHA-256 Audit Trail
+                <Key size={18} /> Cryptographic SHA-256 Audit Trail
               </h3>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 {(role === 'ADMIN' || role === 'AUDITOR') && (
-                  <button onClick={verifyAuditChain} style={{ background: '#238636', border: '1px solid #30363d', color: '#fff', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
-                    Verify Chain
-                  </button>
+                  <>
+                    <button 
+                      type="button" 
+                      onClick={verifyAuditChain} 
+                      style={{ background: '#238636', border: '1px solid #30363d', color: '#fff', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
+                    >
+                      Verify Chain
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={simulateTamper} 
+                      style={{ background: '#8c1d18', border: '1px solid #da3633', color: '#fff', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '11px' }}
+                    >
+                      ⚡ Simulate Tamper
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={repairChain} 
+                      style={{ background: '#21262d', border: '1px solid #30363d', color: '#58a6ff', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '11px' }}
+                    >
+                      Reset Chain
+                    </button>
+                  </>
                 )}
-                <button onClick={fetchAuditLogs} style={{ background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+                <button 
+                  onClick={fetchAuditLogs} 
+                  style={{ background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
+                >
                   <RefreshCw size={12} /> Refresh
                 </button>
               </div>
             </div>
 
             {chainStatus && (
-              <div style={{ padding: '8px 12px', borderRadius: '4px', marginBottom: '12px', fontSize: '12px', background: chainStatus.valid ? '#1c3829' : '#3d1b1f', color: chainStatus.valid ? '#3fb950' : '#f85149', border: `1px solid ${chainStatus.valid ? '#3fb950' : '#f85149'}` }}>
+              <div style={{ 
+                padding: '8px 12px', 
+                borderRadius: '4px', 
+                marginBottom: '12px', 
+                fontSize: '12px', 
+                background: chainStatus.valid ? '#1c3829' : '#3d1b1f', 
+                color: chainStatus.valid ? '#3fb950' : '#f85149', 
+                border: `1px solid ${chainStatus.valid ? '#3fb950' : '#f85149'}` 
+              }}>
                 {chainStatus.message}
               </div>
             )}
 
             {role !== 'ADMIN' && role !== 'AUDITOR' ? (
-              <p style={{ fontSize: '13px', color: '#8b949e' }}>Audit logs restricted to ADMIN and AUDITOR roles. Use the quick evaluator login to inspect.</p>
+              <div style={{ background: '#0d1117', padding: '16px', borderRadius: '6px', border: '1px solid #30363d', textAlign: 'center' }}>
+                <Lock size={24} style={{ color: '#8b949e', marginBottom: '8px' }} />
+                <p style={{ fontSize: '13px', color: '#8b949e', margin: 0 }}>
+                  Audit logs restricted to ADMIN and AUDITOR roles. Use the quick evaluator sign-in to inspect cryptographic blocks.
+                </p>
+              </div>
             ) : (
-              <div style={{ maxHeight: '380px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ maxHeight: '420px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {auditLogs.length === 0 ? (
                   <p style={{ fontSize: '13px', color: '#8b949e' }}>No audit records found.</p>
                 ) : (
                   auditLogs.map((log) => (
                     <div key={log.id} style={{ background: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', padding: '10px', fontSize: '12px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                        <span style={{ color: '#58a6ff', fontWeight: 600 }}>#{log.id} {log.action}</span>
-                        <span style={{ color: '#8b949e' }}>Actor ID: {log.actor_id}</span>
+                        <span style={{ 
+                          color: log.action.includes('DENIED') ? '#f85149' : '#58a6ff', 
+                          fontWeight: 600 
+                        }}>
+                          #{log.id} {log.action}
+                        </span>
+                        <span style={{ color: '#8b949e', fontSize: '11px' }}>Actor ID: {log.actor_id}</span>
                       </div>
                       <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#8b949e', wordBreak: 'break-all', marginBottom: '2px' }}>
                         prev: {log.prev_hash.substring(0, 24)}...
                       </div>
-                      <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#3fb950', wordBreak: 'break-all' }}>
+                      <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#3fb950', wordBreak: 'break-all', marginBottom: '4px' }}>
                         hash: {log.hash.substring(0, 24)}...
+                      </div>
+                      <div style={{ color: '#8b949e', fontSize: '11px', background: '#161b22', padding: '4px 6px', borderRadius: '4px', wordBreak: 'break-all' }}>
+                        {log.details}
                       </div>
                     </div>
                   ))

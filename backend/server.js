@@ -8,6 +8,8 @@ const {
   transferMoney,
   getAsync,
   allAsync,
+  runAsync,
+  logAudit,
   verifyAuditChain
 } = require('./ledgerService');
 
@@ -119,6 +121,14 @@ app.post('/api/transfers', authenticateToken, async (req, res) => {
     if (req.user.role !== 'ADMIN') {
       const sourceAcc = await getAsync(`SELECT user_id FROM accounts WHERE id = ?`, [fromAccountId]);
       if (!sourceAcc || sourceAcc.user_id !== req.user.id) {
+        // Audit the denied attempt in the cryptographic chain before returning 403
+        await logAudit('DENIED_UNAUTHORIZED_ACCESS_ATTEMPT', req.user.id, {
+          targetAccountId: fromAccountId,
+          attemptedTransferTo: toAccountId,
+          attemptedAmount: amount,
+          ip: req.ip || 'evaluator-session'
+        });
+
         return res.status(403).json({ error: 'Unauthorized: Cannot initiate transfers from accounts you do not own.' });
       }
     }
@@ -152,6 +162,44 @@ app.get('/api/audit/verify', authenticateToken,  authorizeRoles('ADMIN', 'AUDITO
   try {
     const result = await verifyAuditChain();
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Demonstration endpoint: Tamper with a past transaction to prove cryptographic detection
+app.post('/api/audit/tamper-simulate', authenticateToken, authorizeRoles('ADMIN', 'AUDITOR'), async (req, res) => {
+  try {
+    const target = await getAsync('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 1 OFFSET 1');
+    if (!target) {
+      return res.status(400).json({ error: 'Need at least 2 audit blocks to simulate tampering.' });
+    }
+    // Tamper with the action details maliciously without recalculating the hash
+    await runAsync(
+      `UPDATE audit_logs SET details = json_set(details, '$.amount', 99999999) WHERE id = ?`,
+      [target.id]
+    );
+    res.json({ message: `Tampered block #${target.id} payload. Run 'Verify Chain' to see the integrity tripwire fire!`, blockId: target.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Restore tamper endpoint for testing reset
+app.post('/api/audit/tamper-repair', authenticateToken, authorizeRoles('ADMIN', 'AUDITOR'), async (req, res) => {
+  try {
+    const logs = await allAsync('SELECT * FROM audit_logs ORDER BY id ASC');
+    const GENESIS = '0000000000000000000000000000000000000000000000000000000000000000';
+    const crypto = require('node:crypto');
+
+    for (let i = 0; i < logs.length; i++) {
+      const prevHash = i === 0 ? GENESIS : logs[i - 1].hash;
+      const payload = `${prevHash}|${logs[i].action}|${logs[i].actor_id}|${logs[i].details}|${logs[i].created_at}`;
+      const validHash = crypto.createHash('sha256').update(payload).digest('hex');
+      await runAsync('UPDATE audit_logs SET prev_hash = ?, hash = ? WHERE id = ?', [prevHash, validHash, logs[i].id]);
+      logs[i].hash = validHash;
+    }
+    res.json({ message: 'Audit chain re-anchored and repaired.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
