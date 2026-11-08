@@ -25,3 +25,15 @@
 - **What the AI Suggested:** Suggested using standard JavaScript `Number` types with decimals (e.g., `19.99`) and `FLOAT` / `REAL` in the database schema.
 - **What Was Wrong / The Flaw:** Standard floating-point arithmetic in software environments conforms to IEEE-754 binary floating-point representation (`0.1 + 0.2 === 0.30000000000000004`). In a double-entry ledger where debits must identically balance credits, fractional rounding errors accumulate over high transaction volumes, leading to phantom currency leaks and reconciliation failures.
 - **What I Did Instead:** Enforced integer arithmetic representing atomic minor currency units (paise/cents). Enforced strict `Number.isInteger(amount)` validation at runtime, paired with an integer database schema and strict non-negative check constraints.
+---
+
+### Prompt Session 6: Express 5 Routing Deprecation & Concurrency Stress Architecture
+* **Prompt Given to AI:** "Add live verification endpoints and build a high-concurrency race condition test suite."
+* **Flaws Caught in AI Output:**
+  1. The AI initially omitted `from_account_id` in the `transactions` schema, causing an immediate SQLITE_ERROR crash during test setup.
+  2. The AI suggested an obsolete Express catch-all route `app.get('*')`, which threw a `TypeError: Missing / in pattern` crash under modern Express 5 path-to-regexp parsing.
+  3. The AI referenced `authenticateToken` prior to its functional initialization in `server.js`, generating a fatal runtime `ReferenceError` during Render deployment.
+* **Manual Correction Applied:**
+  1. Re-architected `backend/database.js` to explicitly track `from_account_id` and `to_account_id` alongside balanced debit/credit legs.
+  2. Replaced deprecated wildcard routes with middleware fallbacks: `app.use((req, res) => res.sendFile(...))`.
+  3. Hoisted all authentication and authorization middleware functions ahead of route registrations, re-validating local and production runtime behavior.
