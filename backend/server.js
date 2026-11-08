@@ -2,164 +2,153 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const db = require('./database');
-const { transferMoney, getAsync, allAsync, verifyAuditChain } = require('./ledgerService');
+const path = require('node:path');
+
+const {
+  transferMoney,
+  getAsync,
+  allAsync,
+  verifyAuditChain
+} = require('./ledgerService');
 
 const app = express();
+const JWT_SECRET = process.env.JWT_SECRET || 'ledgerline_super_secret_jwt_key_2026';
+
 app.use(cors());
 app.use(express.json());
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ledgerline_super_secure_secret_key_2026';
+// Authentication Middleware
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
 
-// 1. Health check endpoint (Mandatory for live testing)
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'UP', timestamp: new Date().toISOString() });
-});
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required.' });
+  }
 
-// 2. Authentication Middleware with Role Checks
-const authenticate = (roles = []) => {
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid or expired token.' });
+    req.user = user;
+    next();
+  });
+}
+
+// Role-Based Authorization Middleware
+function authorizeRoles(...allowedRoles) {
   return (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or malformed Authorization header.' });
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Access forbidden: Insufficient permissions.' });
     }
-
-    const token = authHeader.split(' ')[1];
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      if (roles.length && !roles.includes(decoded.role)) {
-        return res.status(403).json({ error: 'Forbidden: Insufficient privileges.' });
-      }
-      req.user = decoded;
-      next();
-    } catch (err) {
-      return res.status(401).json({ error: 'Invalid or expired token.' });
-    }
+    next();
   };
-};
+}
 
-// 3. User Registration (Admin only or bootstrap)
+// --- AUTH ROUTES ---
 app.post('/api/auth/register', async (req, res) => {
-  const { username, password, role } = req.body;
-  if (!username || !password || !role) {
-    return res.status(400).json({ error: 'Username, password, and role are required.' });
+  const { username, password, role = 'ACCOUNT_HOLDER' } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password required.' });
   }
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
+    const { runAsync } = require('./ledgerService');
     const result = await runAsync(
       `INSERT INTO users (username, password, role) VALUES (?, ?, ?)`,
       [username, hashedPassword, role]
     );
 
-    await logAudit('USER_REGISTERED', result.lastID, { username, role });
-    res.status(201).json({ id: result.lastID, username, role });
+    // Auto-create initial account for new account holders
+    if (role === 'ACCOUNT_HOLDER') {
+      const accNum = `ACC_${username.toUpperCase()}_${Date.now().toString().slice(-4)}`;
+      await runAsync(
+        `INSERT INTO accounts (account_number, user_id, balance) VALUES (?, ?, 10000)`,
+        [accNum, result.lastID]
+      );
+    }
+
+    res.status(201).json({ message: 'User registered successfully.' });
   } catch (err) {
-    res.status(400).json({ error: 'Username already exists or database constraint failed.' });
+    res.status(400).json({ error: 'Username already taken or invalid.' });
   }
 });
 
-// 4. User Login
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   try {
     const user = await getAsync(`SELECT * FROM users WHERE username = ?`, [username]);
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).json({ error: 'Invalid credentials.' });
-    }
+    if (!user) return res.status(401).json({ error: 'Invalid credentials.' });
 
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, {
-      expiresIn: '8h',
-    });
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) return res.status(401).json({ error: 'Invalid credentials.' });
 
-    await logAudit('USER_LOGIN', user.id, { username });
-    res.json({ token, role: user.role, username: user.username });
-  } catch (err) {
-    res.status(500).json({ error: 'Internal server error during login.' });
-  }
-});
-
-// 5. Account Creation (Admin or Account Holder)
-app.post('/api/accounts', authenticate(['ADMIN']), async (req, res) => {
-  const { userId, accountNumber, initialBalance = 0 } = req.body;
-  try {
-    const result = await runAsync(
-      `INSERT INTO accounts (account_number, user_id, balance) VALUES (?, ?, ?)`,
-      [accountNumber, userId, initialBalance]
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '8h' }
     );
 
-    await logAudit('ACCOUNT_CREATED', req.user.id, { accountNumber, userId, initialBalance });
-    res.status(201).json({ id: result.lastID, accountNumber, balance: initialBalance });
+    res.json({ token, role: user.role, username: user.username });
   } catch (err) {
-    res.status(400).json({ error: 'Account number already exists or invalid data.' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// 6. View Accounts
-app.get('/api/accounts', authenticate(['ADMIN', 'AUDITOR', 'ACCOUNT_HOLDER']), async (req, res) => {
+// --- ACCOUNT ROUTES ---
+app.get('/api/accounts', authenticateToken, async (req, res) => {
   try {
-    let rows;
-    if (req.user.role === 'ACCOUNT_HOLDER') {
-      rows = await new Promise((resolve, reject) => {
-        db.all('SELECT * FROM accounts WHERE user_id = ?', [req.user.id], (err, r) => (err ? reject(err) : resolve(r)));
-      });
+    let accounts;
+    if (req.user.role === 'ADMIN' || req.user.role === 'AUDITOR') {
+      accounts = await allAsync(`SELECT * FROM accounts ORDER BY id ASC`);
     } else {
-      rows = await new Promise((resolve, reject) => {
-        db.all('SELECT * FROM accounts', [], (err, r) => (err ? reject(err) : resolve(r)));
-      });
+      accounts = await allAsync(`SELECT * FROM accounts WHERE user_id = ? ORDER BY id ASC`, [req.user.id]);
     }
-    res.json(rows);
+    res.json(accounts);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve accounts.' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// 7. Execute Transfer (Enforces Idempotency Header & Double-Entry)
-app.post('/api/transfers', authenticate(['ADMIN', 'ACCOUNT_HOLDER']), async (req, res) => {
-  const idempotencyKey = req.headers['idempotency-key'] || req.body.idempotencyKey;
-  if (!idempotencyKey) {
-    return res.status(400).json({ error: 'Idempotency-Key header is required for transfers.' });
-  }
-
+// --- TRANSFER ROUTE WITH IDOR & CONCURRENCY CHECKS ---
+app.post('/api/transfers', authenticateToken, async (req, res) => {
   const { fromAccountId, toAccountId, amount } = req.body;
+  const idempotencyKey = req.headers['idempotency-key'];
 
   try {
-    // If account holder, verify they own the source account
-    if (req.user.role === 'ACCOUNT_HOLDER') {
-      const source = await getAsync('SELECT user_id FROM accounts WHERE id = ?', [fromAccountId]);
-      if (!source || source.user_id !== req.user.id) {
-        return res.status(403).json({ error: 'Unauthorized to transfer from this account.' });
+    // IDOR Prevention: verify user owns the source account unless Admin
+    if (req.user.role !== 'ADMIN') {
+      const sourceAcc = await getAsync(`SELECT user_id FROM accounts WHERE id = ?`, [fromAccountId]);
+      if (!sourceAcc || sourceAcc.user_id !== req.user.id) {
+        return res.status(403).json({ error: 'Unauthorized: Cannot initiate transfers from accounts you do not own.' });
       }
     }
 
-    const outcome = await transferMoney({
+    const result = await transferMoney({
       fromAccountId,
       toAccountId,
-      amount: parseInt(amount, 10),
+      amount,
       idempotencyKey,
-      actorId: req.user.id,
+      actorId: req.user.id
     });
 
-    res.status(outcome.status === 'DUPLICATE' ? 200 : 201).json(outcome);
+    res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    const status = err.message.includes('Conflict') ? 409 : 400;
+    res.status(status).json({ error: err.message });
   }
 });
 
-// 8. View Audit Trail (Auditor & Admin Only)
-app.get('/api/audit', authenticate(['ADMIN', 'AUDITOR']), async (req, res) => {
+// --- AUDIT TRAIL ROUTES ---
+app.get('/api/audit', authenticateToken, authorizeRoles('ADMIN', 'AUDITOR'), async (req, res) => {
   try {
-    const logs = await new Promise((resolve, reject) => {
-      db.all('SELECT * FROM audit_logs ORDER BY id ASC', [], (err, rows) => (err ? reject(err) : resolve(rows)));
-    });
+    const logs = await allAsync(`SELECT * FROM audit_logs ORDER BY id DESC LIMIT 50`);
     res.json(logs);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve audit records.' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// On-demand cryptographic audit chain verification
-app.get('/api/audit/verify', authenticateToken, authorizeRoles('ADMIN', 'AUDITOR'), async (req, res) => {
+app.get('/api/audit/verify', authenticateToken,  authorizeRoles('ADMIN', 'AUDITOR'), async (req, res) => {
   try {
     const result = await verifyAuditChain();
     res.json(result);
@@ -168,10 +157,7 @@ app.get('/api/audit/verify', authenticateToken, authorizeRoles('ADMIN', 'AUDITOR
   }
 });
 
-
-const path = require('path');
-
-// Serve frontend build in production
+// --- STATIC ASSET SERVING & FALLBACK FOR PRODUCTION ---
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
