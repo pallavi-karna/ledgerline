@@ -37,3 +37,16 @@
   1. Re-architected `backend/database.js` to explicitly track `from_account_id` and `to_account_id` alongside balanced debit/credit legs.
   2. Replaced deprecated wildcard routes with middleware fallbacks: `app.use((req, res) => res.sendFile(...))`.
   3. Hoisted all authentication and authorization middleware functions ahead of route registrations, re-validating local and production runtime behavior.
+
+  ---
+
+### Prompt Session 6: Express 5 Routing Deprecation & Concurrency Stress Architecture
+* **Prompt Given to AI:** "Add live verification endpoints and build a high-concurrency race condition test suite."
+* **Flaws Caught in AI Output:**
+  1. The AI initially omitted `from_account_id` in the `transactions` schema, causing an immediate SQLITE_ERROR crash during test setup.
+  2. The AI suggested an obsolete Express catch-all route `app.get('*')`, which threw a `TypeError: Missing / in pattern` crash under modern Express 5 path-to-regexp parsing.
+  3. The AI referenced `authenticateToken` prior to its functional initialization in `server.js`, generating a fatal runtime `ReferenceError` during Render deployment.
+* **Manual Correction Applied:**
+  1. Re-architected `backend/database.js` to explicitly track `from_account_id` and `to_account_id` alongside balanced debit/credit legs.
+  2. Replaced deprecated wildcard routes with middleware fallbacks: `app.use((req, res) => res.sendFile(...))`.
+  3. Hoisted all authentication and authorization middleware functions ahead of route registrations, re-validating local and production runtime behavior.
